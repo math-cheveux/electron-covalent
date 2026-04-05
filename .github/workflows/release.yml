@@ -19,6 +19,12 @@ jobs:
           node-version: 22
           cache: npm
 
-      # 3. Publication npm
+      # 3. Authentification à npm
+      - name: Configure npm auth
+        run: echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # 4. Publication npm
       - name: Publishing
         run: npm run release
