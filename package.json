@@ -4,6 +4,9 @@
   "workspaces": [
     "packages/*"
   ],
+  "publishConfig": {
+    "provenance": true
+  },
   "scripts": {
     "clean": "npm run clean -w @electron-covalent/common && npm run clean -w @electron-covalent/core && npm run clean -w @electron-covalent/render",
     "wipe": "npm run clean && rimraf node_modules packages/core/node_modules packages/render/node_modules package-lock.json",
@@ -11,12 +14,12 @@
     "build": "npm run build -w @electron-covalent/common && npm run build -w @electron-covalent/core && npm run build -w @electron-covalent/render",
     "test:core": "npm run test -w @electron-covalent/core && lcov-result-merger 'packages/**/coverage/lcov.info' > coverage/lcov.info",
     "test:render": "npm run test -w @electron-covalent/render && lcov-result-merger 'packages/**/coverage/lcov.info' > coverage/lcov.info",
-    "release": "npm install && npm run build && npm run test:core && npm run test:render && pnpm -r publish --access public --no-git-checks"
+    "release": "npm install && npm run build && npm run test:core && npm run test:render && pnpm -r publish --access public"
   },
   "devDependencies": {
-    "@changesets/cli": "^2.29.8",
+    "@changesets/cli": "^2.30.0",
     "lcov-result-merger": "^5.0.1",
-    "pnpm": "^10.25.0",
+    "pnpm": "^10.33.0",
     "rimraf": "6.0.1"
   }
 }

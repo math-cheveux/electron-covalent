@@ -6,25 +6,16 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: read
+      id-token: write
     steps:
-      # 1. Récupère le code
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      # 2. Installe Node
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-
-      # 3. Authentification à npm
-      - name: Configure npm auth
-        run: echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      # 4. Publication npm
+          registry-url: 'https://registry.npmjs.org'
       - name: Publishing
         run: npm run release
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
