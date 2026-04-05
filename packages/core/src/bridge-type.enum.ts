@@ -5,36 +5,25 @@ import { Main, Renderer } from "./ipc";
 /**
  * Enumeration of the possible types a bridge can contain.
  */
-export abstract class BridgeType {
+export class BridgeType {
   /**
    * @see Bridge.Send
    */
-  public static readonly SEND: BridgeType = new (class extends BridgeType {})(
-    Renderer.send,
-    Main.on,
-  );
+  public static readonly SEND: BridgeType = new BridgeType(Renderer.send, Main.on);
   /**
    * @see Bridge.Invoke
    */
-  public static readonly INVOKE: BridgeType = new (class extends BridgeType {})(
-    Renderer.invoke,
-    Main.handle,
-  );
+  public static readonly INVOKE: BridgeType = new BridgeType(Renderer.invoke, Main.handle);
   /**
    * @see Bridge.On
    */
-  public static readonly ON: BridgeType = new (class extends BridgeType {})(
-    Renderer.on,
-  );
+  public static readonly ON: BridgeType = new BridgeType(Renderer.on);
   /**
    * @see Bridge.Callback
    */
-  public static readonly CALLBACK: BridgeType = new (class extends BridgeType {})(
-    Renderer.callback,
-    Main.onMessagePort,
-  );
+  public static readonly CALLBACK: BridgeType = new BridgeType(Renderer.callback, Main.onMessagePort);
 
-  constructor(
+  private constructor(
     public readonly bridge:
       | ((channel: string) => Bridge.Send<CovalentData>)
       | ((channel: string) => Bridge.Invoke<CovalentData, CovalentData>)

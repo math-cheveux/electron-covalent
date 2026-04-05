@@ -1,3 +1,3 @@
-export { BridgeOpen, CallbackManager, CallbackObservable, CallbackOptions } from "./callback";
-export { bridge, BridgeOf, Bridges, BridgeOfOptions } from "./bridges";
-export { Proxy, ProxySettings } from "./proxy";
+export { BridgeOpen } from "./callback";
+export { BridgeOf, Bridges } from "./bridges";
+export { Proxies, ProxyDefaultFactoryBuilder, ProxyFactory } from "./ipc";

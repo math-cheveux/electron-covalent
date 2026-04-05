@@ -1,7 +1,7 @@
 import { IpcRendererEvent } from "electron";
-import { BehaviorSubject, Observable, Subject } from "rxjs";
+import { Observable, Subscription, timer } from "rxjs";
 import { Bridge, CovalentData } from "@electron-covalent/common";
-import { BridgeOpen, CallbackManager, CallbackManagerImpl } from "./callback";
+import { CallbackManager, CallbackManagerImpl } from "./callback";
 import { KeysOfType } from "./keys-of-type";
 
 /**
@@ -10,36 +10,18 @@ import { KeysOfType } from "./keys-of-type";
 export type BridgeOf<On> = On extends Bridge.On<infer Output> ? Observable<Output> : never;
 
 /**
- * Options of the method <code>Bridges.of</code>.
- * @see Bridges.of
+ * Utility class for manipulating bridge instances (library scope).
  */
-export type BridgeOfOptions<Output extends CovalentData> = {
-  /**
-   * Will define the first value of the bridge observable. Note that the underlying subject will become a BehaviorSubject.
-   */
-  defaultValue: Output;
-  /**
-   * Will define a second value of the bridge observable asynchronously.
-   */
-  init?: PromiseLike<Output>;
-};
-
-/**
- * Utility class for manipulating bridge instances.
- */
-export abstract class Bridges {
-  public static readonly EXPOSE_KEY = "covalent:bridge";
-
-  private static get BRIDGE() {
-    return window[Bridges.EXPOSE_KEY as keyof Window];
-  }
+export abstract class InternalBridges {
+  // @ts-expect-error : this key should be exposed by electron
+  public static readonly EXPOSE_KEY: keyof typeof globalThis = "covalent:bridge";
 
   /**
    * @param group the controller group to test
    * @return `true` if the controller is exposed by IPC, otherwise `false`
    */
   public static isBound(group: string): boolean {
-    return this.BRIDGE?.[group];
+    return !!globalThis[InternalBridges.EXPOSE_KEY]?.[group];
   }
 
   /**
@@ -48,22 +30,22 @@ export abstract class Bridges {
    * @return the instance of the bridge, linked to the passed group controller
    */
   public static bind<T>(group: string, defaultApi?: Partial<T>): T {
-    let obj: unknown = {};
-    if (Bridges.isBound(group)) {
-      Object.keys(this.BRIDGE[group]).forEach((key) => {
+    let obj: Record<string, unknown> = {};
+    if (InternalBridges.isBound(group)) {
+      Object.keys(globalThis[InternalBridges.EXPOSE_KEY][group]).forEach((key) => {
         Object.defineProperty(obj, key, {
-          value: this.BRIDGE[group][key],
+          value: globalThis[InternalBridges.EXPOSE_KEY][group][key],
           writable: false,
         });
       });
     } else {
-      console.warn("BridgeFactory : Cannot get group bridge", group);
+      console.warn("electron-covalent: Cannot get group bridge", group);
       obj = {};
       if (defaultApi) {
         Object.keys(defaultApi).forEach((key) => {
           Object.defineProperty(obj, key, {
             value: (...args: unknown[]) => {
-              console.warn("%s.%s : Not in electron app", group, key);
+              console.warn("electron-covalent: %s.%s is not exposed by the electron app", group, key);
               // @ts-expect-error key is indeed a key of defaultApi
               return defaultApi[key](...args);
             },
@@ -76,21 +58,18 @@ export abstract class Bridges {
   }
 
   /**
+   * @param channel the bridge endpoint name
    * @param on the bridge endpoint
-   * @param options the returned observable parameters.
    * @return an observable bound to the passed `ON` endpoint
    */
   public static of<Output extends CovalentData>(
+    channel: string | number | symbol,
     on: Bridge.On<Output>,
-    options?: BridgeOfOptions<Output>,
   ): Observable<Output> {
-    const subject = options ? new BehaviorSubject<Output>(options.defaultValue) : new Subject<Output>();
-
-    Promise.resolve(options?.init?.then((value) => subject.next(value))).finally(() =>
-      on((event: Bridge.Event<IpcRendererEvent, Output>) => subject.next(event.value)),
-    );
-
-    return subject.asObservable();
+    return new Observable((subscriber) => {
+      const renderer = on((event: Bridge.Event<IpcRendererEvent, Output>) => subscriber.next(event.value));
+      return () => renderer.removeAllListeners(String(channel));
+    });
   }
 
   /**
@@ -102,14 +81,14 @@ export abstract class Bridges {
    * @param callbackKey the `CALLBACK` endpoint key in the bridge
    * @return the callback manager instance
    */
-  public static open<B, Input extends CovalentData, Output extends CovalentData>(
-    bridge: B,
+  public static manage<B, Input extends CovalentData, Output extends CovalentData>(
+    bridge: B | undefined,
     callbackKey: Extract<KeysOfType<B, Bridge.Callback<Input, Output>>, string>,
   ): CallbackManager<Input, Output> {
     return new CallbackManagerImpl<B, Input, Output>(bridge, callbackKey);
   }
 
-  private static readonly CACHE_MAP: Map<Bridge.Invoke<any, any>, Map<unknown, unknown>> = new Map();
+  public static readonly CACHE_MAP: Map<Bridge.Invoke<any, any>, Map<unknown, unknown>> = new Map();
 
   /**
    * Override an `INVOKE` function to implement a stored-value logic.
@@ -130,7 +109,7 @@ export abstract class Bridges {
   ): Bridge.Invoke<Input, Output> {
     const valueMap = new Map<Input, Output>();
     const callCount = new Map<Input, number>();
-    const durationTimeout = new Map<Input, number>();
+    const durationTimeout = new Map<Input, Subscription>();
 
     const fn = async function (data: Input): Promise<Output> {
       // Count calls of the function.
@@ -141,11 +120,13 @@ export abstract class Bridges {
       let value: Output;
 
       // Call IPC.
-      if (!valueMap.has(data)) {
+      if (valueMap.has(data)) {
+        value = valueMap.get(data)!;
+      } else {
         // Invalidate
         callCount.delete(data);
         if (durationTimeout.has(data)) {
-          window.clearTimeout(durationTimeout.get(data));
+          durationTimeout.get(data)?.unsubscribe();
           durationTimeout.delete(data);
         }
 
@@ -156,13 +137,9 @@ export abstract class Bridges {
         if (options?.invalidate?.duration != undefined) {
           durationTimeout.set(
             data,
-            window.setTimeout(() => {
-              valueMap.delete(data);
-            }, options.invalidate.duration),
+            timer(options.invalidate.duration).subscribe(() => valueMap.delete(data)),
           );
         }
-      } else {
-        value = valueMap.get(data)!;
       }
 
       return value;
@@ -172,7 +149,12 @@ export abstract class Bridges {
 
     return fn;
   }
+}
 
+/**
+ * Utility class for manipulating bridge instances.
+ */
+export abstract class Bridges {
   /**
    * Reset the stored-value of an overridden `INVOKE` function.
    * @param fn the overridden function to reset
@@ -180,59 +162,16 @@ export abstract class Bridges {
   public static invalidateCache<Input extends CovalentData, Output extends CovalentData>(
     fn: Bridge.Invoke<Input, Output>,
   ) {
-    this.CACHE_MAP.get(fn)?.clear();
+    InternalBridges.CACHE_MAP.get(fn)?.clear();
   }
 
   /**
    * Reset the stored-value of all overridden `INVOKE` functions.
    */
   public static invalidateCaches() {
-    this.CACHE_MAP.forEach((_value, key) => this.invalidateCache(key));
+    InternalBridges.CACHE_MAP.forEach((_value, key) => this.invalidateCache(key));
   }
-
-  /**
-   * Utility class for defining the default values of proxy class members.
-   */
-  public static readonly Default = class {
-    public static Send(): Bridge.Send<CovalentData> {
-      return () => {};
-    }
-
-    public static Invoke<Output extends CovalentData>(value?: Output): Bridge.Invoke<CovalentData, Output> {
-      return () => Promise.resolve(value) as Promise<Output>;
-    }
-
-    public static Callback<Input extends CovalentData, Output extends CovalentData>(
-      options?: { value: Output },
-    ): BridgeOpen<Bridge.Callback<Input, Output>> {
-      return () => {
-        return options ? new BehaviorSubject<Output>(options.value) : new Subject<Output>();
-      };
-    }
-
-    /* istanbul ignore next */
-    private constructor() {}
-  };
 
   /* istanbul ignore next */
   private constructor() {}
 }
-
-export const bridge = {
-  send : <B, K extends keyof B>(key: K): B[K] extends Bridge.Invoke<any, any> ? never : B[K] extends Bridge.Send<infer Output> ? Bridge.Send<Output> : never => {
-    /*if (!("__covalent:group" in proxy)) {
-      throw new Error("bridge.send should be used ");
-    }*/
-    console.log("send", this, key);
-    return ((data: any) => {}) as any;
-  },
-  invoke<B, K extends keyof B>(key: K): B[K] extends Bridge.Invoke<infer Input, infer Output> ? Bridge.Invoke<Input, Output> : never {
-    throw new Error("not implemented");
-  },
-  of<B, K extends keyof B>(key: K): B[K] extends Bridge.On<infer Output> ? Observable<Output> : never {
-    throw new Error("not implemented");
-  },
-  open<B, K extends keyof B>(key: K): B[K] extends Bridge.Callback<infer Input, infer Output> ? BridgeOpen<Bridge.Callback<Input, Output>> : never {
-    throw new Error("not implemented");
-  },
-};

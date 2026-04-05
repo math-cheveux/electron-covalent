@@ -1,8 +1,6 @@
-import { EMPTY, interval, map } from "rxjs";
+import { interval, map } from "rxjs";
 import { Bridge } from "@electron-covalent/common";
-import { bridge, BridgeOf, BridgeOpen, Bridges, Proxy } from "../src";
-
-type ClickEvent = { buttons: number; x: number; y: number; ctrl: boolean };
+import { Bridges, Proxies } from "../src";
 
 export interface LogBridge {
   info: Bridge.Send<string>;
@@ -12,50 +10,42 @@ export interface ExampleBridge {
   doAction: Bridge.Send<string>;
   getConfig: Bridge.Invoke<void, { url: string }>;
   calculate: Bridge.Invoke<{ x: number }, number>;
-  getDate: Bridge.Invoke<void, Date>;
   onDate: Bridge.On<Date>;
-  onClick: Bridge.On<ClickEvent>;
-  getMetrics: Bridge.Invoke<void, { percentCpuUsage: number }>,
   watchMetrics: Bridge.Callback<{ period: number }, { percentCpuUsage: number }>;
 }
 
-@Proxy<LogProxy, LogBridge>({
-  group: "log",
-  mirror: ["info"],
-})
 export class LogProxy {
-  public readonly info: LogBridge["info"] = Bridges.Default.Send();
+  private readonly $ = Proxies.createDefaultFactoryBuilder<LogBridge>()
+    .onSend("info", (value: string) => console.log(`[INFO] ${value}`))
+    .build("log");
+
+  public readonly info = this.$.send("info");
 }
 
-@Proxy<ExampleProxy, ExampleBridge>({
-  group: "example",
-  mirror: ["doAction", "calculate", "getDate", "getMetrics"],
-  map: (bridge) => ({
-    getConfiguration: Bridges.cache(bridge.getConfig),
-    date$: Bridges.of(bridge.onDate, { defaultValue: new Date(), init: bridge.getDate() }),
-    click$: Bridges.of(bridge.onClick),
-    watch: Bridges.open(bridge, "watchMetrics"),
-  }),
-})
+export const defaultDoActionSpy = jest.fn((action: string) => console.log(`do ${action}`));
+
 export class ExampleProxy {
-  public readonly doAction: ExampleBridge["doAction"] = Bridges.Default.Send();
-  public readonly getConfiguration: ExampleBridge["getConfig"] = Bridges.Default.Invoke({ url: "/" });
-  public readonly calculate: ExampleBridge["calculate"] = Bridges.Default.Invoke(NaN);
-  public readonly getDate: ExampleBridge["getDate"] = Bridges.Default.Invoke(new Date());
-  public readonly date$: BridgeOf<ExampleBridge["onDate"]> = interval(250).pipe(map(() => new Date()));
-  public readonly click$: BridgeOf<ExampleBridge["onClick"]> = EMPTY;
-  public readonly getMetrics: ExampleBridge["getMetrics"] = Bridges.Default.Invoke({ percentCpuUsage: NaN });
-  public readonly watch: BridgeOpen<ExampleBridge["watchMetrics"]> = Bridges.Default.Callback({ value: { percentCpuUsage: NaN }});
+  private readonly $ = Proxies.createDefaultFactoryBuilder<ExampleBridge>()
+    .onSend("doAction", defaultDoActionSpy)
+    .onInvoke("getConfig", { url: "/" })
+    .onInvoke("calculate", ({ x }) => x)
+    .listenTo("onDate", interval(250).pipe(map(() => new Date())))
+    .watchTo("watchMetrics", ({ period }) =>
+      interval(period).pipe(
+        map(() => ({
+          percentCpuUsage: Number.NaN,
+        })),
+      ),
+    )
+    .build("example");
+
+  public readonly doAction = this.$.send("doAction");
+  public readonly getConfiguration = this.$.invoke.cache("getConfig");
+  public readonly calculate = this.$.invoke("calculate");
+  public readonly date$ = this.$.of("onDate");
+  public readonly watch = this.$.open("watchMetrics");
 
   public resetConfig(): void {
     Bridges.invalidateCache(this.getConfiguration);
   }
 }
-
-@Proxy<NewExampleProxy, ExampleBridge>({ group: "example" })
-export class NewExampleProxy {
-  public readonly doAction = bridge.send<ExampleBridge, "doAction">("doAction");
-}
-
-const proxy = new NewExampleProxy();
-proxy.doAction("");

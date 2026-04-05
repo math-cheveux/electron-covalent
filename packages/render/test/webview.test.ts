@@ -1,19 +1,22 @@
 import { Bridges } from "../src";
 import { ExampleBridge, ExampleProxy, LogProxy } from "./test-interfaces";
+import { firstValueFrom, interval } from "rxjs";
+import { InternalBridges } from "../src/bridges";
 
-afterEach(() => {
-  Bridges.invalidateCaches();
-  jest.clearAllMocks();
-});
+async function pause(period: number) {
+  return firstValueFrom(interval(period));
+}
 
 function spyBridge(group: string, endPoint: string): jest.SpyInstance {
-  // @ts-ignore
-  return jest.spyOn(window[Bridges.EXPOSE_KEY][group], endPoint);
+  return jest.spyOn(globalThis[InternalBridges.EXPOSE_KEY][group], endPoint);
 }
 
 describe("browser-side inside electron", () => {
+  const renderer = {
+    removeAllListeners: jest.fn().mockName("example:onDate:close"),
+  };
   // @ts-ignore
-  window[Bridges.EXPOSE_KEY] = {
+  globalThis[InternalBridges.EXPOSE_KEY] = {
     log: {
       info: jest.fn().mockName("log:info"),
     },
@@ -21,41 +24,52 @@ describe("browser-side inside electron", () => {
       doAction: jest.fn().mockName("example:doAction"),
       getConfig: jest.fn().mockName("example:getConfig"),
       calculate: jest.fn().mockName("example:calculate"),
-      getDate: jest.fn(() => Promise.resolve(new Date())).mockName("example:getDate"),
-      onDate: jest.fn().mockName("example:onDate"),
-      onClick: jest.fn().mockName("example:onClick"),
-      getMetrics: jest.fn(() => Promise.resolve(0.14)).mockName("example:getMetrics"),
-      watchMetrics: jest.fn().mockName("example:watchMetrics"),
+      onDate: jest.fn(() => renderer).mockName("example:onDate"),
+      watchMetrics: jest.fn(() => 0).mockName("example:watchMetrics"),
       "watchMetrics:__close": jest.fn().mockName("example:watchMetrics:close"),
     },
   };
+  const infoSpy = spyBridge("log", "info");
+  const configSpy = spyBridge("example", "getConfig");
+  const calculateSpy = spyBridge("example", "calculate");
+  const onSpy = spyBridge("example", "onDate");
+  const onCloseSpy = jest.spyOn(renderer, "removeAllListeners");
+  const watchSpy = spyBridge("example", "watchMetrics");
+  const closeSpy = spyBridge("example", "watchMetrics:__close");
 
   const logProxy = new LogProxy();
   const exampleProxy = new ExampleProxy();
 
+  afterEach(() => {
+    Bridges.invalidateCaches();
+    jest.clearAllMocks();
+  });
+
   test("should be bound", () => {
-    expect(Bridges.isBound("log")).toBeTruthy();
-    expect(Bridges.isBound("example")).toBeTruthy();
+    expect(InternalBridges.isBound("log")).toBeTruthy();
+    expect(InternalBridges.isBound("example")).toBeTruthy();
   });
 
   test("should bind", () => {
-    // @ts-ignore
-    expect(Bridges.bind("log")).toMatchObject(window[Bridges.EXPOSE_KEY]["log"]);
-    // @ts-ignore
-    expect(Bridges.bind("example")).toMatchObject(window[Bridges.EXPOSE_KEY]["example"]);
+    expect(InternalBridges.bind("log")).toMatchObject(globalThis[InternalBridges.EXPOSE_KEY]["log"]);
+    expect(InternalBridges.bind("example")).toMatchObject(globalThis[InternalBridges.EXPOSE_KEY]["example"]);
   });
 
   test("should call bridge", () => {
-    const infoSpy = spyBridge("log", "info");
-
     expect(infoSpy).not.toHaveBeenCalled();
     logProxy.info("test");
     expect(infoSpy).toHaveBeenCalledWith("test");
   });
 
-  test("should use cache", async () => {
-    const configSpy = spyBridge("example", "getConfig");
+  test("should not use cache", async () => {
+    expect(calculateSpy).toHaveBeenCalledTimes(0);
+    await exampleProxy.calculate({ x: 0 });
+    expect(calculateSpy).toHaveBeenCalledTimes(1);
+    await exampleProxy.calculate({ x: 0 });
+    expect(calculateSpy).toHaveBeenCalledTimes(2);
+  });
 
+  test("should use cache", async () => {
     expect(configSpy).toHaveBeenCalledTimes(0);
     await exampleProxy.getConfiguration();
     expect(configSpy).toHaveBeenCalledTimes(1);
@@ -64,8 +78,6 @@ describe("browser-side inside electron", () => {
   });
 
   test("should reset cache", async () => {
-    const configSpy = spyBridge("example", "getConfig");
-
     expect(configSpy).toHaveBeenCalledTimes(0);
     await exampleProxy.getConfiguration();
     expect(configSpy).toHaveBeenCalledTimes(1);
@@ -75,8 +87,6 @@ describe("browser-side inside electron", () => {
   });
 
   test("should reset all cache", async () => {
-    const configSpy = spyBridge("example", "getConfig");
-
     expect(configSpy).toHaveBeenCalledTimes(0);
     await exampleProxy.getConfiguration();
     expect(configSpy).toHaveBeenCalledTimes(1);
@@ -86,9 +96,7 @@ describe("browser-side inside electron", () => {
   });
 
   test("should reset cache after X times", async () => {
-    const configSpy = spyBridge("example", "getConfig");
-    // @ts-ignore
-    const configMethod = Bridges.cache(Bridges.bind<ExampleBridge>("example")["getConfig"], {
+    const configMethod = InternalBridges.cache(InternalBridges.bind<ExampleBridge>("example")["getConfig"], {
       invalidate: {
         callCount: 2,
       },
@@ -104,9 +112,7 @@ describe("browser-side inside electron", () => {
   });
 
   test("should reset cache after period", async () => {
-    const configSpy = spyBridge("example", "getConfig");
-    // @ts-ignore
-    const configMethod = Bridges.cache(Bridges.bind<ExampleBridge>("example")["getConfig"], {
+    const configMethod = InternalBridges.cache(InternalBridges.bind<ExampleBridge>("example")["getConfig"], {
       invalidate: {
         duration: 2500,
       },
@@ -117,68 +123,32 @@ describe("browser-side inside electron", () => {
     expect(configSpy).toHaveBeenCalledTimes(1);
     await configMethod();
     expect(configSpy).toHaveBeenCalledTimes(1);
-    setTimeout(async () => {
-      await configMethod();
-      expect(configSpy).toHaveBeenCalledTimes(2);
-    }, 5000);
+    await pause(5000);
+    await configMethod();
+    expect(configSpy).toHaveBeenCalledTimes(2);
+  }, 6000);
+
+  test("should listen from observable", () => {
+    expect(onSpy).not.toHaveBeenCalled();
+    expect(onCloseSpy).not.toHaveBeenCalled();
+
+    const subscription = new ExampleProxy().date$.subscribe();
+    expect(onSpy).toHaveBeenCalled();
+    expect(onCloseSpy).not.toHaveBeenCalled();
+
+    subscription.unsubscribe();
+    expect(onCloseSpy).toHaveBeenCalledWith("example:onDate");
   });
 
   test("should open and close callback", () => {
-    const watchSpy = spyBridge("example", "watchMetrics");
-    const closeSpy = spyBridge("example", "watchMetrics:__close");
-
     expect(watchSpy).not.toHaveBeenCalled();
-    const obs = exampleProxy.watch({ period: 200 });
-    setTimeout(() => {
-      expect(watchSpy).toHaveBeenCalled();
-      expect(closeSpy).not.toHaveBeenCalled();
-      obs.complete();
-      expect(closeSpy).toHaveBeenCalled();
-    });
-  });
+    expect(closeSpy).not.toHaveBeenCalled();
 
-  test("should callback have default value", () => {
-    const watchMethod = Bridges.open<ExampleBridge, { period: number }, { percentCpuUsage: number }>(
-      Bridges.bind<ExampleBridge>("example"),
-      "watchMetrics",
-    );
+    const subscription = exampleProxy.watch({ period: 200 }, () => {});
+    expect(watchSpy).toHaveBeenCalled();
+    expect(closeSpy).not.toHaveBeenCalled();
 
-    const obs = watchMethod.open({ period: 200 }, { defaultValue: { percentCpuUsage: 0.42 } });
-    obs.subscribe((data) => {
-      expect(data.percentCpuUsage).toBe(0.42);
-      obs.complete();
-    });
-  });
-
-  test("should on observable get first value from invoke", () => {
-    const getSpy = spyBridge("example", "getDate");
-    const onSpy = spyBridge("example", "onDate");
-
-    expect(getSpy).not.toHaveBeenCalled();
-    expect(onSpy).not.toHaveBeenCalled();
-    new ExampleProxy();
-    setTimeout(() => {
-      expect(getSpy).toHaveBeenCalled();
-      expect(onSpy).toHaveBeenCalled();
-    }, 200);
-  });
-
-  test("should callback get first value from invoke", () => {
-    const watchMethod = Bridges.open<ExampleBridge, { period: number }, { percentCpuUsage: number }>(
-      Bridges.bind<ExampleBridge>("example"),
-      "watchMetrics",
-    );
-
-    const obs = watchMethod.open(
-      { period: 200 },
-      {
-        defaultValue: { percentCpuUsage: NaN },
-        init: Bridges.bind<ExampleBridge>("example")["getMetrics"](),
-      },
-    );
-    obs.subscribe((data) => {
-      expect(data.percentCpuUsage).toBe(0.14);
-      obs.complete();
-    });
+    subscription.unsubscribe();
+    expect(closeSpy).toHaveBeenCalledWith(0);
   });
 });

@@ -68,7 +68,7 @@ export class Controllers {
         console.error(
           `${provider.useClass.name} has dependencies to unknown/missing controllers: ${errors.join(", ")}.`,
         );
-        if (errors.some((error) => error === "?")) {
+        if (errors.includes("?")) {
           console.error(
             `If the arguments are actually registered controllers, this issue could be caused by a cycle dependency between controllers inside a same project.`,
           );
@@ -295,7 +295,7 @@ export class Renderer {
 
   public static on<Output extends CovalentData>(channel: string): Bridge.On<Output> {
     return (on: (next: Bridge.Event<Electron.IpcRendererEvent, Output>) => void) => {
-      ipcRenderer.on(channel, (event, value) => on({ event, value }));
+      return ipcRenderer.on(channel, (event, value) => on({ event, value }));
     };
   }
 

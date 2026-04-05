@@ -201,95 +201,58 @@ To install Covalent in your frontend project, run the following command:
 npm i @electron-covalent/render
 ```
 
-## Definition with the decorator
+## Definition
 
-To define a proxy, just add the `Proxy` decorator on an Angular service (or a simple class if it is not an Angular
-project).
+To define a proxy, you have to create a factory first with `Proxies.createFactory`.
+A proxy factory creates the functions mapped to the bridge.
+Factories have four methods, one for each type of communication:
 
-```typescript
-import { EMPTY, interval, map } from "rxjs";
-import { BridgeOf, BridgeOpen, Bridges, Proxy } from "@electron-covalent/render";
+- `send`: creates a function mapped to a `SEND` endpoint
+- `invoke`: creates a function mapped to a `INVOKE` endpoint
+- `of`: creates an `Observable` attached to a `ON` endpoint
+- `open`: creates a function returning a `Subscription` attached to a `CALLBACK` lifecycle
 
-@Injectable() // Angular services decorator.
-@Proxy<ExampleProxy, ExampleBridge>({
-  group: "example",
-  mirror: ["doAction", "calculate"],
-  map: (bridge) => ({
-    getConfiguration: bridge.getConfig, // or Bridges.cache(bridge.getConfig) for optimization
-    date$: Bridges.of(bridge.onDate),
-    click$: Bridges.of(bridge.onClick),
-    watch: Bridges.open(bridge, "watchMetrics"),
-  }),
-})
-export class ExampleProxy {
-  public readonly doAction: ExampleBridge["doAction"]
-    = Bridges.Default.Send();
-  public readonly getConfiguration: ExampleBridge["getConfig"]
-    = Bridges.Default.Invoke({ url: "/" });
-  public readonly calculate: ExampleBridge["calculate"]
-    = Bridges.Default.Invoke(NaN);
-  public readonly date$: BridgeOf<ExampleBridge["onDate"]>
-    = interval(250).pipe(map(() => new Date()));
-  public readonly click$: BridgeOf<ExampleBridge["onClick"]>
-    = EMPTY;
-  public readonly watch: BridgeOpen<ExampleBridge["watchMetrics"]>
-    = Bridges.Default.Callback({ value: { percentCpuUsage: NaN } });
+Factories have a fifth method that is a variant of `invoke`, `invoke.cache`: this method will store the received
+values if it is called multiple times.
+`invoke.cache` accepts a second argument to define a reset behavior, otherwise, use `Bridges.invalidateCache` (cf.
+`resetConfig` in the example) or `Bridges.invalidateCaches` to reset the cache manually.
+_Note_: cached values are not shared between application instances, and they are deleted at the end of the
+application.
 
-  // If Bridges.cache is used for getConfiguration.
-  public resetConfig(): void {
-    Bridges.invalidateCache(this.getConfiguration);
-  }
-}
-```
+On top of a proxy factory, you can create a factory builder with `Proxies.createDefaultFactoryBuilder` to define a
+default behavior if you want your application to run outside Electron (for tests for example).
+Same as factories, builders have four methods:
 
-- `group` is the associated controller's unique ID.
-- `mirror` defines the mapping between the bridge instance and the proxy instance for their common members. **Warning**:
-  only `SEND` and `INVOKE` endpoints can be defined here.
-- `map` defines the mapping of the bridge instance on the proxy instance. Keys are the proxy members name, values are
-  the bridge mapping.
-  The utility class `Bridges` must be used:
-  - `cache` can be used on `INVOKE` endpoints to optimize calls that will return the same value everytime for a given
-    parameter.
-    `cache` accepts a second argument to define a reset behavior, otherwise, use `Bridges.invalidateCache` (cf.
-    `resetConfig` in the example) or `Bridges.invalidateCaches` to reset the cache manually.
-    _Note_: cached values are not shared between application instances, and they are deleted at the end of the
-    application.
-  - `of` must be used to manage `ON` endpoints.
-  - `open` must be used to manage `CALLBACK` endpoints.
+- `onSend`: defines the default behavior of a `send` function
+- `onInvoke`: defines the default behavior of an `invoke` function
+- `listenTo`: defines the data that the `of` `Observable` will receive by default
+- `watchTo`: defines the data that the `open` subscriber will receive by default
 
-`mirror` and `map` are optional parameters, since it is not required that one proxy exposes all its controller
-endpoints.
+Builders have a fifth method, the `build` method that will create a corresponding factory.
 
-Since render processes could be executed in a non-Electron context, a default function/observable should be defined for
-proxy mapped members.
-The utility class `Bridges.Default` must be used in these cases (defining an observable is right for `ON` endpoints).
-`Bridges.Default.Invoke` and `Bridges.Default.Callback` takes an optional parameter: it will define the value returned
-by default.
-
-`CALLBACK` lifecycle is managed by Covalent.
-According to the example, calling the `watch` method will return a `CallbackObservable`.
-This interface behaves like a classic RxJS observable, but it exposes an additional method: `complete`.
-This method will ask the closure of the `CALLBACK` in the core process (cf. `CALLBACK` sequence diagram).
-
-_Note_: it is still possible to don't use the `Proxy` decorator thanks to the `Bridges.bind` method, since that the
-decorator is just an easy, secured and automatized way to expose the bridge.
-It is recommended to use this function only in specific situations (example: generic proxy).
-
-## Definition with functions
+`Proxies.createFactory` and `ProxyDefaultFactoryBuilder.build` methods need one parameter. It corresponds to the
+associated controller's unique ID.
 
 ```typescript
-import { interval, map } from "rxjs";
-import { invoke, Proxy, on, open, send } from "@electron-covalent/render";
+import { BehaviorSubject, interval, map } from "rxjs";
+import { Proxies } from "@electron-covalent/render";
+
+// const BRIDGE = Proxies.createFactory<ExampleBridge>("example");
+const BRIDGE = Proxies.createDefaultFactoryBuilder<ExampleBridge>()
+  .onInvoke("getConfig", { url: "/" })
+  .onInvoke("calculate", Number.NaN)
+  .listenTo("onDate", interval(250).pipe(map(() => new Date())))
+  .watchTo("watchMetrics", () => new BehaviorSubject({ percentCpuUsage: Number.NaN }))
+  .build("example");
 
 @Injectable() // Angular services decorator.
-@Proxy({ group: "example" })
 export class ExampleProxy {
-  public readonly doAction = send<ExampleBridge>(this, "doAction");
-  public readonly getConfiguration = invoke.cache<ExampleBridge>(this, "getConfig", { defaultValue: { url: "/" } });
-  public readonly calculate = invoke<ExampleBridge>(this, "calculate", { defaultValue: NaN });
-  public readonly date$ = on<ExampleBridge>(this, "onDate", { defaultObservable: interval(250).pipe(map(() => new Date())) });
-  public readonly click$ = on<ExampleBridge>(this, "onClick");
-  public readonly watch = open<ExampleBridge>(this, "watchMetrics", { defaultValue: { percentCpuUsage: NaN } });
+  public readonly doAction = BRIDGE.send("doAction");
+  public readonly getConfiguration = BRIDGE.invoke.cache("getConfig");
+  public readonly calculate = BRIDGE.invoke("calculate");
+  public readonly date$ = BRIDGE.on("onDate");
+  public readonly click$ = BRIDGE.on("onClick");
+  public readonly watch = BRIDGE.open("watchMetrics");
 
   // If invoke.cache is used for getConfiguration.
   public resetConfig(): void {
@@ -297,6 +260,3 @@ export class ExampleProxy {
   }
 }
 ```
-
-These functions are a more concise way to declare a proxy, but they can be used only directly on the class attributes
-(not even in the constructor).

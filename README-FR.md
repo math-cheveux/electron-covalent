@@ -205,79 +205,62 @@ npm i @electron-covalent/render
 
 ## Définition
 
-Pour définir un proxy, il suffit d'ajouter le décorateur `Proxy` à un service Angular (ou une simple classe s'il ne
-s'agit pas d'un projet Angular).
+Pour définir un proxy, il faut d'abord créer une _factory_ de proxy avec `Proxies.createFactory`.
+Une factory permet de créer les fonctions attachées à un bridge.
+Les factories ont quatre méthodes, une pour chaque type de communication.
+
+- `send` : crée une fonction attachée à un endpoint de type `SEND`
+- `invoke` : crée une fonction attachée à un endpoint de type `INVOKE`
+- `of` : crée un `Observable` attachée à un endpoint `ON`
+- `open` : crée une fonction qui retourne une `Subscription` attachée au cycle de vie d'un `CALLBACK`
+
+Les factories ont une cinquième méthode qui est une variante de `invoke`, `invoke.cache` : cette méthode garde en
+mémoire les valeurs reçues si elle est appelée plusieurs fois.
+`invoke.cache` accepte un second argument optionnel pour définir un comportement de réinitialisation, sinon il est
+possible d'utiliser `Bridges.invalidateCache` (cf. `resetConfig`dans l'exemple) ou `Bridges.invalidateCaches` pour
+réinitialiser le cache manuellement.
+_Note_ : les valeurs mises en cache ne sont pas partagées entre plusieurs instances de l'application, et elles
+sont effacées à la fin du programme.
+
+En plus d'une factory, il est possible de créer un _builder_ de factory avec `Proxies.createDefaultFactoryBuilder` pour
+définir un comportement par défaut si vous voulez que votre application puisse tourner en dehors d'un contexte Electron
+(pour des tests par exemple).
+Comme les factories, les builders ont quatre méthodes :
+
+- `onSend`: définit le comportement par défaut d'une fonction `send`
+- `onInvoke`: définit le comportement par défaut d'une fonction `invoke`
+- `listenTo`: définit les données reçues par défaut par l'`Observable` retourné par `of`
+- `watchTo`: définit les données reçues par défaut par l'abonné retourné par `open`
+
+Les builders ont une cinquième méthode, la méthode `build` pour créer une factory associée.
+
+Les méthodes `Proxies.createFactory` et `ProxyDefaultFactoryBuilder.build` demandent un paramètre. Il correspond à
+l'identifiant unique du contrôleur auquel le proxy se rattache.
 
 ```typescript
-import { EMPTY, interval, map } from "rxjs";
-import { BridgeOf, BridgeOpen, Bridges, Proxy } from "@electron-covalent/render";
+import { BehaviorSubject, interval, map } from "rxjs";
+import { Proxies } from "@electron-covalent/render";
 
-@Injectable() // Décorateur des services Angular.
-@Proxy<ExampleProxy, ExampleBridge>({
-  group: "example",
-  mirror: ["doAction", "calculate"],
-  map: (bridge) => ({
-    getConfiguration: bridge.getConfig, // ou Bridges.cache(bridge.getConfig) pour optimiser
-    date$: Bridges.of(bridge.onDate),
-    click$: Bridges.of(bridge.onClick),
-    watch: Bridges.open(bridge, "watchMetrics"),
-  }),
-})
+// const BRIDGE = Proxies.createFactory<ExampleBridge>("example");
+const BRIDGE = Proxies.createDefaultFactoryBuilder<ExampleBridge>()
+  .onInvoke("getConfig", { url: "/" })
+  .onInvoke("calculate", Number.NaN)
+  .listenTo("onDate", interval(250).pipe(map(() => new Date())))
+  .watchTo("watchMetrics", () => new BehaviorSubject({ percentCpuUsage: Number.NaN }))
+  .build("example");
+
+@Injectable() // Angular services decorator.
 export class ExampleProxy {
-  public readonly doAction: ExampleBridge["doAction"]
-    = Bridges.Default.Send();
-  public readonly getConfiguration: ExampleBridge["getConfig"]
-    = Bridges.Default.Invoke({ url: "/" });
-  public readonly calculate: ExampleBridge["calculate"]
-    = Bridges.Default.Invoke(NaN);
-  public readonly date$: BridgeOf<ExampleBridge["onDate"]>
-    = interval(250).pipe(map(() => new Date()));
-  public readonly click$: BridgeOf<ExampleBridge["onClick"]>
-    = EMPTY;
-  public readonly watch: BridgeOpen<ExampleBridge["watchMetrics"]>
-    = Bridges.Default.Callback({ value: { percentCpuUsage: NaN } });
+  public readonly doAction = BRIDGE.send("doAction");
+  public readonly getConfiguration = BRIDGE.invoke.cache("getConfig");
+  public readonly calculate = BRIDGE.invoke("calculate");
+  public readonly date$ = BRIDGE.on("onDate");
+  public readonly click$ = BRIDGE.on("onClick");
+  public readonly watch = BRIDGE.open("watchMetrics");
 
-  // Si Bridges.cache est utilisé pour getConfiguration.
+  // Si invoke.cache est utilisé pour getConfiguration.
   public resetConfig(): void {
     Bridges.invalidateCache(this.getConfiguration);
   }
 }
 ```
-
-- `group` est l'identifiant unique du contrôleur auquel le proxy se rattache.
-- `mirror` définit le mappage de l'instance du bridge sur l'instance du proxy pour les membres qui partagent un même
-  nom.
-  **Attention** : seuls les endpoints de type `SEND` et `INVOKE` peuvent être définis par `mirror`.
-- `map` définit le mappage de l'instance du bridge sur l'instance du proxy. Les clés correspondent aux membres du proxy,
-  tandis que les valeurs décrivent comment le bridge doit être mappé.
-  La classe utilitaire `Bridges` est à utiliser :
-  - `cache` peut être utilisé pour les endpoints de type `INVOKE` pour optimiser les appels qui retourneront la même
-    valeur à chaque fois pour le paramètre donné.
-    `cache` accepte un second argument optionnel pour définir un comportement de réinitialisation, sinon il est
-    possible d'utiliser `Bridges.invalidateCache` (cf. `resetConfig`dans l'exemple) ou `Bridges.invalidateCaches` pour
-    réinitialiser le cache manuellement.
-    _Note_ : les valeurs mises en cache ne sont pas partagées entre plusieurs instances de l'application, et elles
-    sont effacées à la fin du programme.
-  - `of` doit être utilisé pour gérer les endpoints de type `ON`.
-  - `open` doit être utilisé pour gérer les endpoints de type `CALLBACK`.
-
-`mirror` et `map` sont des paramètres optionnels, car un proxy n'est pas obligé d'exposer tous les endpoints de son
-contrôleur.
-
-Parce que les rendus Angular pourraient être exécutés dans un contexte hors Electron, il faut définir une valeur par
-défaut aux membres qui accueilleront les valeurs fournies par le décorateur `Proxy`.
-Pour cela, il faut utiliser les méthodes fournies par la classe utilitaire `Bridges.Default` (pour les endpoints de type
-`ON`, la définition d'un observable suffit).
-`Bridges.Default.Invoke` et `Bridges.Default.Callback` prennent un paramètre optionnel en argument.
-Il définit la valeur par défaut qui sera renvoyée par la fonction.
-
-Le cycle de vie des `CALLBACK` est géré par Covalent.
-En reprenant l'exemple, quand on fera un appel à la méthode `watch`, on recevra en retour un `CallbackObservable`.
-Cette interface se comporte comme un observable RxJS classique, elle expose juste une méthode supplémentaire :
-`complete`.
-C'est cette méthode qui fera en coulisse la demande de fermeture du `CALLBACK` au processus principal (cf. diagramme de
-séquence du type `CALLBACK`).
-
-_Note_ : il reste possible d'utiliser le bridge sans passer par le décorateur `Proxy` grâce à la méthode`Bridges.bind`,
-le décorateur n'étant qu'un moyen facile, sûr et automatisé d'exploiter le bridge.
-Il est donc recommandé d'utiliser cette fonction que pour des cas bien particuliers (exemple : proxy générique).
