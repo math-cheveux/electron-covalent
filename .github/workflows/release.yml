@@ -23,7 +23,7 @@ jobs:
           node-version: 22
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Dependencies installation
+      - name: Install dependencies
         run: npm ci
 
       - name: Build
