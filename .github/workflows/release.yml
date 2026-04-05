@@ -11,8 +11,6 @@ jobs:
       # 1. Récupère le code
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       # 2. Installe Node
       - name: Setup Node.js
@@ -27,10 +25,18 @@ jobs:
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - run: npm ci
+      - name: Dependencies installation
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Testing core
+        run: npm run test:core
+
+      - name: Testing render
+        run: npm run test:render
 
       # 4. Publication npm
       - name: Publishing
         run: npm run release
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
