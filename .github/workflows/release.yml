@@ -17,13 +17,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-
-      # 3. Authentification à npm
-      - name: Configure npm auth
-        run: echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n@electron-covalent:registry=https://registry.npmjs.org/" > ~/.npmrc
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Dependencies installation
         run: npm ci
@@ -40,3 +33,5 @@ jobs:
       # 4. Publication npm
       - name: Publishing
         run: npm run release
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
